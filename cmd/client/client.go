@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	pb "github.com/anirudhsudhir/grpc-chat-app/grpc_api"
+	pb "github.com/anirudhsudhir/grpc-chat-app/grpc-api"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -24,6 +24,7 @@ type ChatClient struct {
 	serverAddr    string
 	gRPCClient    pb.ChatServerClient
 	username      string
+	writer        *bufio.Writer
 	ctx           ctx.Context
 	cancelFunc    ctx.CancelCauseFunc
 }
@@ -31,8 +32,11 @@ type ChatClient struct {
 func main() {
 	chatClient := ChatClient{}
 	chatClient.ctx, chatClient.cancelFunc = ctx.WithCancelCause(ctx.Background())
+	chatClient.writer = bufio.NewWriter(os.Stdout)
+
 	flag.IntVar(&chatClient.gRPCLocalPort, "gRPCLocalPort", 8081, "port used by local gRPC server")
 	flag.StringVar(&chatClient.serverAddr, "serverAddr", "localhost:8080", "server address")
+	flag.Parse()
 
 	go chatClient.startServer()
 
@@ -58,24 +62,18 @@ func main() {
 	}
 }
 
-func (s *ChatClient) startServer() {
-	lis, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", s.gRPCLocalPort))
+func (c *ChatClient) startServer() {
+	lis, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", c.gRPCLocalPort))
 	if err != nil {
-		log.Fatalf("failed to listen on %d -> %+v", &s.gRPCLocalPort, err)
+		log.Fatalf("failed to listen on %d -> %+v", &c.gRPCLocalPort, err)
 	}
 
 	gRPCServer := grpc.NewServer()
-	pb.RegisterChatClientServer(gRPCServer, s)
+	pb.RegisterChatClientServer(gRPCServer, c)
 
-	// log.Printf("gRPC server serving over port %d", s.gRPCServerPort)
 	if err := gRPCServer.Serve(lis); err != nil {
 		log.Fatalf("gRPC server failed to serve -> %+v", err)
 	}
-}
-
-func (s *ChatClient) SendMessage(ctx ctx.Context, req *pb.SendRequest) (*pb.SendResponse, error) {
-	log.Printf("Received a SendMessage RPC")
-	return &pb.SendResponse{RequestReceived: true}, nil
 }
 
 func (c *ChatClient) startChatLoop() {
@@ -90,6 +88,11 @@ func (c *ChatClient) startChatLoop() {
 	}
 	c.username = strings.Trim(uname, "\n")
 
+	_, err = c.gRPCClient.RegisterClient(c.ctx, &pb.RegisterRequest{Username: c.username, ClientAddr: fmt.Sprintf("localhost:%d", c.gRPCLocalPort)})
+	if err != nil {
+		log.Fatalf("failed to register client with server at address %q -> %+v", c.serverAddr, err)
+	}
+
 	fmt.Printf("Send a message to start chatting!\n")
 	for {
 		fmt.Printf("%s: ", c.username)
@@ -101,8 +104,8 @@ func (c *ChatClient) startChatLoop() {
 		}
 		msg = strings.Trim(msg, "\n")
 
-		ctx, cancFunc := ctx.WithTimeout(c.ctx, 3*time.Second)
-		resp, err := c.gRPCClient.BroadcastMessage(ctx, &pb.BroadcastRequest{Text: c.username + ": " + msg})
+		ctx, cancFunc := ctx.WithTimeout(c.ctx, 10*time.Second)
+		resp, err := c.gRPCClient.BroadcastMessage(ctx, &pb.BroadcastRequest{Text: msg, Username: c.username})
 		cancFunc()
 
 		if err != nil {
@@ -111,4 +114,19 @@ func (c *ChatClient) startChatLoop() {
 			log.Printf("failed to send %q successfully\n", msg)
 		}
 	}
+}
+
+func (c *ChatClient) SendMessage(ctx ctx.Context, req *pb.SendRequest) (*pb.SendResponse, error) {
+	_, err := fmt.Fprintf(c.writer, "\n%s: %s\n%s: ", req.Username, req.Text, c.username)
+	if err != nil {
+		log.Printf("failed to write broadcasted message to Stdout -> %+v\n", err)
+		return nil, err
+	}
+	err = c.writer.Flush()
+	if err != nil {
+		log.Printf("failed to flush broadcasted message to Stdout -> %+v\n", err)
+		return nil, err
+	}
+
+	return &pb.SendResponse{RequestReceived: true}, nil
 }
