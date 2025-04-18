@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+option go_package = "github.com/anirudhsudhir/grpc_chat_app/grpc_api";
+
+service ChatServer {
+  rpc BroadcastMessage (BroadcastRequest) returns (BroadcastResponse) {}
+}
+
+message BroadcastRequest {
+  string text = 1;
+}
+
+message BroadcastResponse {
+  bool requestReceived = 1;
+}
+
+service ChatClient {
+  rpc SendMessage (SendRequest) returns (SendResponse) {}
+}
+
+message SendRequest {
+  string text = 1;
+}
+
+message SendResponse {
+  bool requestReceived = 1;
+}
